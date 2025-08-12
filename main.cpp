@@ -153,3 +153,25 @@ int main() {
     return 0;
 
 }
+
+// # Remove the .git folder (this deletes all Git history)
+// rm -rf .git
+
+// # Reinitialize Git
+// git init
+
+// # Add your .gitignore file first
+// git add .gitignore
+
+// # Add all other files except ignored ones
+// git add .
+
+// # Commit them
+// git commit -m "Initial commit without dataset and compiled files"
+
+// # Link to your GitHub repo
+// git remote add origin https://github.com/<your-username>/<repo-name>.git
+
+// # Push fresh history
+// git branch -M main
+// git push -u origin main --force
