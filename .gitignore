@@ -1,0 +1,24 @@
+
+# Ignore dataset binaries
+mnist_data/*.bin
+
+# Ignore compiled object files
+*.o
+*.obj
+
+# Ignore compiled executables
+*.exe
+*.out
+*.app
+
+# Ignore build directories
+build/
+build_release/
+bin/
+dist/
+
+main
+main_dnn
+once
+test
+
