@@ -19,6 +19,8 @@ set(SOURCES
     src/autograd/ops_impl.cpp
     src/autograd/kernels.cpp 
     src/autograd/grad_mode.cpp
+    src/autograd/tensor_iter.cpp
+    src/autograd/shape_ops.cpp
     
     
     src/nn/module.cpp 

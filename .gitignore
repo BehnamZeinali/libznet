@@ -16,6 +16,7 @@ build/
 build_release/
 bin/
 dist/
+.vscode/
 
 main
 main_dnn

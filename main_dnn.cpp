@@ -166,7 +166,7 @@ int main() {
 
             znet::Tensor logits = model.forward(x);
             znet::Tensor loss = criterion(logits, y);
-
+            std::cout << "loss calculated: " << loss.data()[0] << std::endl;
             optimizer.zero_grad();
             loss.backward();
             optimizer.step();

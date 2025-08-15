@@ -10,6 +10,15 @@
 
 namespace znet {
 
+// NEW: forward declare a Storage that owns the backing buffer
+struct Storage {
+    // Keep it simple: one shared vector for now (easy to extend later)
+    std::shared_ptr<std::vector<float>> data;
+
+    Storage() : data(std::make_shared<std::vector<float>>()) {}
+    explicit Storage(size_t n) : data(std::make_shared<std::vector<float>>(n)) {}
+};
+
 class TensorImpl;
 
 class Tensor {
@@ -91,6 +100,27 @@ public:
     // ----- Grad accumulation -----
     void accumulate_grad(const Tensor& g); // allocates zero grad if null, then += elementwise
 
+
+    // --- NEW: view primitives ---
+    Tensor as_strided(const std::vector<int>& sizes,
+                    const std::vector<int>& strides,
+                    int64_t storage_offset) const;
+
+    // Metadata-only transpose (no copy). Keeps Storage, tweaks sizes/strides.
+    Tensor transpose_view(int dim0, int dim1) const;
+
+    // Metadata-only slice (no copy). Keeps Storage, bumps offset & shrinks size.
+    Tensor slice_view(int dim, int start, int end) const;
+
+
+    // --- NEW: minimal low-level accessors for kernels ---
+    int rank() const { return static_cast<int>(shape().size()); }
+    int64_t storage_offset() const;              // view start offset (in elements)
+    const float* data_ptr() const;               // base pointer (to underlying storage)
+    float* data_ptr();
+
+
+
 private:
     std::shared_ptr<TensorImpl> impl_;
 };
@@ -103,7 +133,11 @@ public:
 
     void compute_stride();
 
-    std::vector<float> data_;
+    // NEW: move raw data into a shared Storage + offset
+    std::shared_ptr<Storage> storage_;  // backing buffer (shared by views)
+    int64_t                  storage_offset_ = 0; // NEW: starting index into storage
+
+    // Keep your existing metadata names to minimize churn
     std::vector<int>   shape_;
     std::vector<int>   stride_;
 

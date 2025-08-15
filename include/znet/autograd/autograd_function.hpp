@@ -158,6 +158,7 @@ struct MatmulFunction : public Function {
     SavedTensor a_, b_;
     Tensor a_view_, b_view_;
 
+    
     MatmulFunction(const Tensor& a, const Tensor& b) ;
 
     const char* name() const override { return "MatmulFunction"; }
@@ -170,7 +171,13 @@ struct ReLUFunction : public Function {
     SavedTensor x_;
     Tensor x_view_;
 
-    ReLUFunction(const Tensor& x) ;
+   
+    // ReLUFunction(const Tensor& x) ;
+
+     // NEW: save the *output* y = relu(x) to build the mask safely
+    SavedTensor y_;
+    Tensor      y_view_;
+    ReLUFunction(const Tensor& x);
 
     const char* name() const override { return "ReLUFunction"; }
     std::vector<Tensor*> inputs() const override ;

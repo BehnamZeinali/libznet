@@ -7,7 +7,14 @@
 namespace znet {
 
 Tensor add_impl(const Tensor& a, const Tensor& b) {
-   Tensor out = add_kernel(a, b);
+    // Tensor out = add_kernel(a, b);
+    // allocate output (contiguous row-major, requires_grad depends on inputs)
+    std::vector<int> out_shape = a.shape();
+    Tensor out(out_shape, std::vector<float>(a.numel()), /*requires_grad=*/a.requires_grad() || b.requires_grad());
+    add_kernel_strided(out, a, b);  // NEW: handles views + broadcasting
+
+// then the usual autograd wiring (unchanged)
+
 
     // 2) If grad mode is on AND any input requires grad, wire autograd
     if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
@@ -18,7 +25,18 @@ Tensor add_impl(const Tensor& a, const Tensor& b) {
 }
 
 Tensor matmul_impl(const Tensor& a, const Tensor& b) {
-   Tensor out = matmul_kernel(a, b);
+
+    const std::vector<int> out_shape = compute_matmul_out_shape_view(a, b);
+    std::cout << "matmul_impl: out_shape____ = ";
+//    Tensor out = matmul_kernel(a, b);
+    // Derive M,N,K, broadcast leading dims (use the helpers above)
+    // Allocate C (contiguous row-major): out_shape = L + [M,N]
+    Tensor out(out_shape, std::vector<float>((size_t)prod(out_shape), 0.0f), /*req_grad=*/false);
+
+    // If you pass B already as a transpose view, call with (false,false). If not, call with (false,true).
+    matmul_strided_batched_kernel(a, b /*or B_tview*/, out,
+                                  /*A_logical_trans=*/false,
+                                  /*B_logical_trans=*/false /*or true*/);
 
     // 2) If grad mode is on AND any input requires grad, wire autograd
     if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
@@ -40,11 +58,33 @@ Tensor matmul_impl_(const Tensor& a, const Tensor& b) {
 }
 
 
-Tensor relu_impl(const Tensor& input) {
-    Tensor out = relu_kernel(input);
-    if (GradMode::is_enabled() && (input.requires_grad() ))
-        out.set_grad_fn(std::make_shared<ReLUFunction>(input));
-        // out.set_grad_fn(std::make_shared<ReLUFunction>(input));
+Tensor relu_impl(const Tensor& x) {
+    // Tensor out = relu_kernel(input);
+
+
+    // 1) Allocate contiguous output with same logical shape
+    // std::vector<int> out_shape = input.shape();
+    // Tensor out(out_shape, std::vector<float>(input.numel()), /*requires_grad=*/false);
+
+    // // 2) Run pure kernel (view-aware, no autograd)
+    // relu_kernel_strided(out, input);
+    // if (GradMode::is_enabled() && (input.requires_grad() ))
+    //     out.set_grad_fn(std::make_shared<ReLUFunction>(input));
+    //     // out.set_grad_fn(std::make_shared<ReLUFunction>(input));
+    // return out;
+
+    std::vector<int> out_shape = x.shape();
+    Tensor out(out_shape, std::vector<float>(x.numel()), /*requires_grad=*/false);
+
+    // run forward kernel (already view-aware)
+    relu_kernel_strided(out, x);
+
+    // autograd wiring
+    if (GradMode::is_enabled() && x.requires_grad()) {
+        out.set_requires_grad(true);
+        // IMPORTANT: pass both x (for graph) and out (for mask)
+        out.set_grad_fn(std::make_shared<ReLUFunction>(x));
+    }
     return out;
 }
 
