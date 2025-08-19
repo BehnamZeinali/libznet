@@ -25,6 +25,7 @@ void relu_backward_kernel_accum(Tensor& grad_in, const Tensor& x, const Tensor& 
 
 void matmul_strided_batched_kernel(const Tensor& A, const Tensor& B, Tensor& C,
                                           bool A_logical_trans, bool B_logical_trans);
+void mm_strided_batched_kernel(const Tensor& A, const Tensor& B, Tensor& C);
                                           
 std::vector<int> broadcast_leading(const std::vector<int>& a, const std::vector<int>& b);
 inline int64_t prod(const std::vector<int>& v);

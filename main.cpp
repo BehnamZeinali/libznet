@@ -95,19 +95,19 @@ int main() {
     Tensor out2 = layer2(out1);
 
     // Step 4: Compute loss = MSE: (out2 - target)^2
-    Tensor diff = add(out2, Tensor({1, 1}, {-target[0][0]}));  // out2 - target
-    Tensor loss = mul(diff, diff);  // squared error
-
+    // Tensor diff = add(out2, Tensor({1, 1}, {target[0][0]}));  // out2 - target
+    //Tensor loss = diff.mul(diff);
+    
     std::cout << "Loss:\n";
-    loss.print();
+    // diff.print();
 
     // Step 5: Backward
-    loss.backward();
+    // diff.backward();
 
     // Step 6: Print gradients
     std::cout << "\nGradients for layer1:\n";
     for (const auto& p : layer1.ptr()->parameters()) {
-        std::cout << "- Requires grad? " << std::boolalpha << p->requires_grad() << "\n";
+        // std::cout << "- Requires grad? " << std::boolalpha << p->requires_grad() << "\n";
         if (!p->grad()) {
             std::cout << "  → No grad computed.\n";
         } else {
@@ -117,7 +117,7 @@ int main() {
 
     std::cout << "\nGradients for layer2:\n";
     for (const auto& p : layer2.ptr()->parameters()) {
-        std::cout << "- Requires grad? " << std::boolalpha << p->requires_grad() << "\n";
+        // std::cout << "- Requires grad? " << std::boolalpha << p->requires_grad() << "\n";
         if (!p->grad()) {
             std::cout << "  → No grad computed.\n";
         } else {

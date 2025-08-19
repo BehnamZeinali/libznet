@@ -1,124 +1,122 @@
 #include "znet/autograd/shape_ops.hpp"
 #include <stdexcept>
-#include <numeric>
+#include <vector>
+#include <cstdint>
+#include <algorithm>
 
 namespace znet {
 
-static inline int64_t numel_of(const std::vector<int>& sizes) {
+// ---- helpers: 64-bit, row-major math on logical shapes ----
+static inline int64_t numel_of(const std::vector<int64_t>& sizes) {
     int64_t n = 1;
-    for (int s : sizes) n *= s;
+    for (int64_t s : sizes) n *= s;
     return n;
 }
-static inline std::vector<int64_t> rowmajor_strides(const std::vector<int>& sizes) {
+
+static inline std::vector<int64_t> rowmajor_strides(const std::vector<int64_t>& sizes) {
     std::vector<int64_t> s(sizes.size());
     int64_t stride = 1;
-    for (int i = (int)sizes.size() - 1; i >= 0; --i) {
-        s[i] = stride;
-        stride *= sizes[i];
+    for (int i = static_cast<int>(sizes.size()) - 1; i >= 0; --i) {
+        s[static_cast<size_t>(i)] = stride;
+        stride *= sizes[static_cast<size_t>(i)];
     }
     return s;
 }
-static inline std::vector<int> left_pad_sizes(const std::vector<int>& v, int ndim) {
-    std::vector<int> r(ndim - (int)v.size(), 1);
+
+static inline std::vector<int64_t> left_pad_sizes(const std::vector<int64_t>& v, int ndim) {
+    std::vector<int64_t> r(static_cast<size_t>(ndim) - v.size(), 1); // leading 1s
     r.insert(r.end(), v.begin(), v.end());
     return r;
 }
 
-Tensor sum_to_shape(const Tensor& src, const std::vector<int>& dst_shape_in) {
+// ---- sum_to_shape: reduce src to dst_shape by summing broadcasted dims ----
+Tensor sum_to_shape(const Tensor& src, const std::vector<int64_t>& dst_shape_in) {
     const auto& sshape = src.shape();
-    const int sN = (int)sshape.size();
-    const int dN = (int)dst_shape_in.size();
-    if (dN > sN) throw std::runtime_error("sum_to_shape: dst rank > src rank");
-
-    // Fast path: [B,F] -> [F]
-    if (sN == 2 && dN == 1 && sshape[1] == dst_shape_in[0]) {
-        const int B = sshape[0];
-        const int F = sshape[1];
-        std::vector<float> out(F, 0.0f);
-        const auto& sdata = src.data(); // assume row-major contiguous
-        for (int i = 0; i < B; ++i) {
-            const int base = i * F;
-            for (int j = 0; j < F; ++j) {
-                out[j] += sdata[base + j];
-            }
-        }
-        return Tensor({F}, std::move(out), /*requires_grad=*/false);
+    const int   sN = static_cast<int>(sshape.size());
+    const int   dN = static_cast<int>(dst_shape_in.size());
+    if (dN > sN) {
+        throw std::runtime_error("sum_to_shape: dst rank > src rank");
     }
 
-    // General path (contiguous src, row-major):
-    // Map every src index to a dst index by clamping dims where dst==1
-    // and dropping leading dims that dst doesn't have.
-    std::vector<int> dst_shape = dst_shape_in;
-    std::vector<int> sp = sshape;
-    std::vector<int> dp = left_pad_sizes(dst_shape, sN); // align dst to src rank
+    // Align dst shape to src rank by left-padding with 1s
+    const std::vector<int64_t> dst_shape = dst_shape_in;
+    const std::vector<int64_t> sp = sshape;
+    const std::vector<int64_t> dp = left_pad_sizes(dst_shape, sN); // length == sN
 
-    // Validate broadcasting compatibility
+    // Validate broadcasting compatibility (right-aligned)
     for (int d = 0; d < sN; ++d) {
-        if (!(sp[d] == dp[d] || dp[d] == 1)) {
+        if (!(sp[static_cast<size_t>(d)] == dp[static_cast<size_t>(d)] ||
+              dp[static_cast<size_t>(d)] == 1)) {
             throw std::runtime_error("sum_to_shape: incompatible shapes for reduction");
         }
     }
 
     const int64_t src_numel = numel_of(sp);
     const int64_t dst_numel = numel_of(dst_shape);
-    std::vector<float> out(dst_numel, 0.0f);
 
-    // Precompute strides
-    auto sstrides = rowmajor_strides(sp);
-    auto dstrides = rowmajor_strides(dst_shape);
-
-    // For index conversion, we’ll decode src linear -> multi-d idx, then map to dst idx.
-    const auto& sdata = src.data();
-
-    for (int64_t lin = 0; lin < src_numel; ++lin) {
-        // decode src multi-index
-        int64_t t = lin;
-        int dst_lin = 0;
-        for (int d = 0; d < sN; ++d) {
-            const int dim_size = sp[d];
-            const int idx_d = (int)(t / sstrides[d]) % dim_size;
-            t %= sstrides[d];
-
-            // map to dst index along aligned dim
-            int use_idx;
-            if (dp[d] == 1) {
-                use_idx = 0;                 // reduced/broadcasted dim -> collapses to 0
-            } else {
-                // dp[d] == sp[d] here
-                // Need to place it into the *compressed* dst index (without leading dims)
-                // We'll build dst_lin incrementally using dst strides over dst_shape
-                // Figure out which dst dim this corresponds to:
-                const int dst_dim = d - (sN - dN); // negative => leading src dim (reduced)
-                if (dst_dim < 0) {
-                    // leading extra src dim -> always reduced (ignored)
-                    continue;
-                }
-                dst_lin += use_idx * (int)dstrides[dst_dim]; // but we haven't set use_idx yet; fix below
+    // Fast path: [B, F] -> [F] and src is contiguous (common case)
+    if (sN == 2 && dN == 1 &&
+        sp[1] == dst_shape[0] &&
+        src.is_contiguous())
+    {
+        const int64_t B = sp[0];
+        const int64_t F = sp[1];
+        std::vector<float> out(static_cast<size_t>(F), 0.0f);
+        const float* sdata = src.data_ptr() + src.storage_offset();
+        for (int64_t i = 0; i < B; ++i) {
+            const int64_t base = i * F;
+            for (int64_t j = 0; j < F; ++j) {
+                out[static_cast<size_t>(j)] += sdata[static_cast<size_t>(base + j)];
             }
         }
+        return Tensor({F}, std::move(out), /*requires_grad=*/false);
+    }
 
-        // The above approach needs a cleaner mapping. Let's redo mapping cleanly:
+    // General path (works for non-contiguous src):
+    // Enumerate all logical src indices via row-major decoding (independent of storage),
+    // map each to a dst index (collapsing reduced dims), and accumulate.
 
-        // Recompute properly:
-        t = lin;
-        std::vector<int> src_idx(sN, 0);
+    std::vector<float> out(static_cast<size_t>(dst_numel), 0.0f);
+
+    // Precompute logical (row-major) strides for index decoding/encoding
+    const auto sstrides = rowmajor_strides(sp);        // for decoding lin -> src_idx
+    const auto dstrides = rowmajor_strides(dst_shape); // for encoding dst_idx -> lin
+
+    // If src is contiguous, we can read by linear index; otherwise use at(src_idx)
+    const bool src_contig = src.is_contiguous();
+    const float* sdata = src_contig ? (src.data_ptr() + src.storage_offset()) : nullptr;
+
+    // Buffers reused in the loop
+    std::vector<int64_t> src_idx(static_cast<size_t>(sN), 0);
+    std::vector<int64_t> dst_idx(static_cast<size_t>(dN), 0);
+
+    for (int64_t lin = 0; lin < src_numel; ++lin) {
+        // Decode src linear index to src_idx (row-major)
+        int64_t t = lin;
         for (int d = 0; d < sN; ++d) {
-            src_idx[d] = (int)(t / sstrides[d]) % sp[d];
-            t %= sstrides[d];
+            const int64_t dim_size = sp[static_cast<size_t>(d)];
+            const int64_t stride_d = sstrides[static_cast<size_t>(d)];
+            src_idx[static_cast<size_t>(d)] = (t / stride_d) % dim_size;
+            t %= stride_d;
         }
-        // Build dst multi-index (length dN)
-        std::vector<int> dst_idx(dN, 0);
+
+        // Build aligned dst_idx (right-aligned w.r.t. src)
         for (int d = 0; d < dN; ++d) {
-            const int src_dim = d + (sN - dN);    // align right
-            dst_idx[d] = (dp[src_dim] == 1) ? 0 : src_idx[src_dim];
+            const int src_dim = d + (sN - dN); // align right
+            dst_idx[static_cast<size_t>(d)] =
+                (dp[static_cast<size_t>(src_dim)] == 1) ? 0 : src_idx[static_cast<size_t>(src_dim)];
         }
-        // Convert dst_idx -> linear
+
+        // Encode dst_idx to linear index (row-major)
         int64_t dl = 0;
         for (int d = 0; d < dN; ++d) {
-            dl += (int64_t)dst_idx[d] * dstrides[d];
+            dl += dst_idx[static_cast<size_t>(d)] * dstrides[static_cast<size_t>(d)];
         }
 
-        out[dl] += sdata[lin];
+        // Accumulate
+        const float val = src_contig ? sdata[static_cast<size_t>(lin)]
+                                     : src.at(src_idx);
+        out[static_cast<size_t>(dl)] += val;
     }
 
     return Tensor(dst_shape, std::move(out), /*requires_grad=*/false);

@@ -16,8 +16,8 @@ build/
 build_release/
 bin/
 dist/
-.vscode/
-
+.vscode/*.json
+*.py
 main
 main_dnn
 once

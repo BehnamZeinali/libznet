@@ -9,7 +9,7 @@ namespace znet {
 Tensor add_impl(const Tensor& a, const Tensor& b) {
     // Tensor out = add_kernel(a, b);
     // allocate output (contiguous row-major, requires_grad depends on inputs)
-    std::vector<int> out_shape = a.shape();
+    std::vector<int64_t> out_shape = a.shape();
     Tensor out(out_shape, std::vector<float>(a.numel()), /*requires_grad=*/a.requires_grad() || b.requires_grad());
     add_kernel_strided(out, a, b);  // NEW: handles views + broadcasting
 
@@ -26,18 +26,31 @@ Tensor add_impl(const Tensor& a, const Tensor& b) {
 
 Tensor matmul_impl(const Tensor& a, const Tensor& b) {
 
-    const std::vector<int> out_shape = compute_matmul_out_shape_view(a, b);
-    std::cout << "matmul_impl: out_shape____ = ";
+    // const std::vector<int> out_shape = compute_matmul_out_shape_view(a, b);
+//     const std::vector<int> out_shape =
+//             compute_mm_out_shape_flags(/*A=*/a, /*B=*/b,
+//                                        /*transA=*/false, /*transB=*/true);
+//     // std::cout << "matmul_impl: out_shape____ = ";
+// //    Tensor out = matmul_kernel(a, b);
+//     // Derive M,N,K, broadcast leading dims (use the helpers above)
+//     // Allocate C (contiguous row-major): out_shape = L + [M,N]
+//     Tensor out(out_shape, std::vector<float>((size_t)prod(out_shape), 0.0f), /*req_grad=*/false);
+   
+//     matmul_strided_batched_kernel(a, b /*or B_tview*/, out,
+//                                   /*A_logical_trans=*/false,
+//                                   /*B_logical_trans=*/true /*or true*/);
+
+    Tensor Wt = b.transpose_view(0,1);
+    const std::vector<int> out_shape = compute_matmul_out_shape_view(/*A=*/a, /*B=*/Wt);
+    // std::cout << "matmul_impl: out_shape____ = ";
 //    Tensor out = matmul_kernel(a, b);
     // Derive M,N,K, broadcast leading dims (use the helpers above)
     // Allocate C (contiguous row-major): out_shape = L + [M,N]
     Tensor out(out_shape, std::vector<float>((size_t)prod(out_shape), 0.0f), /*req_grad=*/false);
+   
+    mm_strided_batched_kernel(a, Wt /*or B_tview*/, out);
 
-    // If you pass B already as a transpose view, call with (false,false). If not, call with (false,true).
-    matmul_strided_batched_kernel(a, b /*or B_tview*/, out,
-                                  /*A_logical_trans=*/false,
-                                  /*B_logical_trans=*/false /*or true*/);
-
+   
     // 2) If grad mode is on AND any input requires grad, wire autograd
     if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
         out.set_requires_grad(true);  // this output participates in autograd
@@ -73,7 +86,7 @@ Tensor relu_impl(const Tensor& x) {
     //     // out.set_grad_fn(std::make_shared<ReLUFunction>(input));
     // return out;
 
-    std::vector<int> out_shape = x.shape();
+    std::vector<int64_t> out_shape = x.shape();
     Tensor out(out_shape, std::vector<float>(x.numel()), /*requires_grad=*/false);
 
     // run forward kernel (already view-aware)

@@ -30,8 +30,8 @@ set(SOURCES
     
     src/optim/sgd.cpp
 
-    main_dnn.cpp
+    main_dnn_4d.cpp
 )
 
 # Build the final executable
-add_executable(znet_main ${SOURCES})
+add_executable(znet_dnn_4d ${SOURCES})

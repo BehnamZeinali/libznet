@@ -479,17 +479,15 @@ void MatmulFunction::backward(Tensor& grad_out) {
 
     // dA = dY @ B^T   -> shapes: dY[... M,N], B[... K,N] -> dA_full[... M,K]
     if (A.requires_grad()) {
-        const std::vector<int> dA_shape =
-            compute_mm_out_shape_flags(/*A=*/grad_out, /*B=*/B,
-                                       /*transA=*/false, /*transB=*/false);
-
+        // const std::vector<int> dA_shape =
+        //     compute_mm_out_shape_flags(/*A=*/grad_out, /*B=*/B,
+        //                                /*transA=*/false, /*transB=*/false);
+        const std::vector<int> dA_shape = compute_matmul_out_shape_view(/*A=*/grad_out, /*B=*/B);
         Tensor dA_full(dA_shape,
                        std::vector<float>(static_cast<size_t>(prod(dA_shape)), 0.0f),
                        /*requires_grad=*/false);
 
-        matmul_strided_batched_kernel(/*A=*/grad_out, /*B=*/B, /*C=*/dA_full,
-                                      /*A_logical_trans=*/false,
-                                      /*B_logical_trans=*/false); // Bᵀ
+        mm_strided_batched_kernel(/*A=*/grad_out, /*B=*/B, /*C=*/dA_full); // Bᵀ
 
         // If A was broadcast across leading dims during forward, reduce back:
         Tensor dA = (dA_full.shape() == A.shape())
@@ -501,17 +499,13 @@ void MatmulFunction::backward(Tensor& grad_out) {
 
     // dB = A^T @ dY   -> shapes: A[... M,K], dY[... M,N] -> dB_full[... K,N]
     if (B.requires_grad()) {
-        const std::vector<int> dB_shape =
-            compute_mm_out_shape_flags(/*A=*/A, /*B=*/grad_out,
-                                       /*transA=*/true, /*transB=*/false);
+        const std::vector<int> dB_shape = compute_matmul_out_shape_view(/*A=*/grad_out.transpose_view(0,1), /*B=*/A);
 
         Tensor dB_full(dB_shape,
                        std::vector<float>(static_cast<size_t>(prod(dB_shape)), 0.0f),
                        /*requires_grad=*/false);
 
-        matmul_strided_batched_kernel(/*A=*/A, /*B=*/grad_out, /*C=*/dB_full,
-                                      /*A_logical_trans=*/true,   // Aᵀ
-                                      /*B_logical_trans=*/false);
+        mm_strided_batched_kernel(/*A=*/grad_out.transpose_view(0,1), /*B=*/A, /*C=*/dB_full);
 
         Tensor dB = (dB_full.shape() == B.shape())
                     ? dB_full

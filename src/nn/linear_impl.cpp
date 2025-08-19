@@ -50,9 +50,9 @@ Tensor LinearImpl::forward(const Tensor& input) {
     // return output;
 
     // weight: [out,in]; use a view for weight^T: [in,out], no copy
-    Tensor Wt = weight_->transpose_view(0,1);
-    Tensor output = matmul_impl(input, Wt); // both flags false inside
-     std::cout << "LinearImpl::forward: input shape = " ;// << input.shape() << ", weight shape = " << weight_->shape() << ", output shape = " << output.shape() << std::endl;
+    
+    Tensor output = matmul_impl(input, *weight_); // both flags false inside
+    //  std::cout << "LinearImpl::forward: input shape = " ;// << input.shape() << ", weight shape = " << weight_->shape() << ", output shape = " << output.shape() << std::endl;
     if (use_bias_) output = add_impl(output, *bias_);
     return output;
     

@@ -116,7 +116,7 @@ Tensor cross_entropy_kernel(const Tensor& logits, const Tensor& target) {
 
     float mean_loss = std::accumulate(loss_values.begin(), loss_values.end(), 0.0f) / batch_size;
 
-    Tensor out({}, {mean_loss}, logits.requires_grad());
+    Tensor out({1}, {mean_loss}, logits.requires_grad());
     
     return out;
 }
@@ -185,7 +185,7 @@ Tensor matmul_A_BT_kernel(const Tensor& A, const Tensor& B) {
 }
 
 
-static inline int64_t numel_from_sizes(const std::vector<int>& sizes) {
+static inline int64_t numel_from_sizes(const std::vector<int64_t>& sizes) {
     int64_t n = 1;
     for (int s : sizes) n *= s;
     return n;
@@ -286,7 +286,7 @@ void relu_kernel_strided(Tensor& out, const Tensor& x) {
     }
 }
 
-static inline std::vector<int64_t> rowmajor_strides(const std::vector<int>& sizes) {
+static inline std::vector<int64_t> rowmajor_strides(const std::vector<int64_t>& sizes) {
     std::vector<int64_t> s(sizes.size());
     int64_t stride = 1;
     for (int i = static_cast<int>(sizes.size()) - 1; i >= 0; --i) {
@@ -297,7 +297,7 @@ static inline std::vector<int64_t> rowmajor_strides(const std::vector<int>& size
 }
 
 static inline bool is_contiguous_like(const Tensor& t,
-                                      const std::vector<int>& sizes) {
+                                      const std::vector<int64_t>& sizes) {
     if (t.shape() != sizes) return false;
     if (t.numel() == 0) return true;
     if constexpr (true) {
@@ -346,7 +346,7 @@ void relu_backward_kernel_accum(Tensor& grad_in, const Tensor& x, const Tensor& 
     const int ndim = static_cast<int>(sizes.size());
 
     // Left-pad strides to ndim
-    auto pad64 = [&](const std::vector<int>& v)->std::vector<int64_t>{
+    auto pad64 = [&](const std::vector<int64_t>& v)->std::vector<int64_t>{
         std::vector<int64_t> r(ndim - static_cast<int>(v.size()), 0);
         r.insert(r.end(), v.begin(), v.end());
         return r;
@@ -448,9 +448,9 @@ inline int64_t prod(const std::vector<int>& v){ int64_t p=1; for(int x:v)p*=x; r
 
 std::vector<int> compute_matmul_out_shape_view(const Tensor& A, const Tensor& B) {
     const auto& As = A.shape();
-    A.print_shape();
+    // A.print_shape();
     const auto& Bs = B.shape();
-    B.print_shape();
+    // B.print_shape();
     if (As.size() < 2 || Bs.size() < 2)
         throw std::runtime_error("matmul: rank must be >= 2");
 
@@ -461,7 +461,7 @@ std::vector<int> compute_matmul_out_shape_view(const Tensor& A, const Tensor& B)
     int N  = Bs[Bs.size()-1];
     // std::cout << "matmul: M=" << M << ", K=" << K << ", K2=" << K2 << ", N=" << N << std::endl;
     if (K != K2){
-        std::cout << "matmul: M=" << M << ", K=" << K << ", K2=" << K2 << ", N=" << N << std::endl;
+        // std::cout << "matmul: M=" << M << ", K=" << K << ", K2=" << K2 << ", N=" << N << std::endl;
         throw std::runtime_error("matmul: inner dims do not match___");
     }
         
@@ -506,59 +506,62 @@ std::vector<int> compute_mm_out_shape_flags(const Tensor& A, const Tensor& B,
 // C[...] = A[...] @ B[...]
 // A_mat: (M,K) via strides; B_mat: (K,N) via strides; C is contiguous MxN per batch
 void matmul_strided_batched_kernel(const Tensor& A, const Tensor& B, Tensor& C,
-                                          bool A_logical_trans, bool B_logical_trans) {
-    const auto& Ash=A.shape(); const auto& Bsh=B.shape();
-    if (Ash.size()<2 || Bsh.size()<2) throw std::runtime_error("matmul: rank>=2");
+                                   bool A_logical_trans, bool B_logical_trans)
+{
+    const auto& Ash = A.shape();
+    const auto& Bsh = B.shape();
+    if (Ash.size() < 2 || Bsh.size() < 2) throw std::runtime_error("matmul: rank>=2");
 
-    // Build refs to last-2 dims with logical transpose via strides
     MatRef Ar = as_matrix_ref(A, A_logical_trans);
     MatRef Br = as_matrix_ref(B, B_logical_trans);
-    std::cout << "matmul: A=" << Ar.M << "x" << Ar.K << ", B=" << Br.K << "x" << Br.N << std::endl;
-    if (Ar.K != Br.K) throw std::runtime_error("matmul: inner dim mismatch");
 
-    // Broadcast leading dims
-    std::vector<int> Alead(Ash.begin(), Ash.end()-2);
-    std::vector<int> Blead(Bsh.begin(), Bsh.end()-2);
+    // >>> FIX: derive K from Ar/Br M,N instead of MatRef::K
+    const int M = Ar.M;
+    const int N = Br.N;
+    const int K_left  = Ar.N;   // A's columns after logical transpose
+    const int K_right = Br.M;   // B's rows    after logical transpose
+    if (K_left != K_right) throw std::runtime_error("matmul: inner dim mismatch");
+    const int K = K_left;
+    // <<< FIX
+
+    // Broadcast leading dims (unchanged)
+    std::vector<int> Alead(Ash.begin(), Ash.end() - 2);
+    std::vector<int> Blead(Bsh.begin(), Bsh.end() - 2);
     std::vector<int> L = broadcast_leading(Alead, Blead);
+    const int64_t BATCH = L.empty() ? 1 : prod(L);
 
-    // Output shape = L + [M,N] (already allocated by caller)
-    const int M = Ar.M, N = Br.N, K = Ar.K;
-    const int64_t BATCH = L.empty()? 1 : prod(L);
-
-    // Build multipliers to decode a flat batch index into per-tensor batch offsets (for broadcast)
     const int d = (int)L.size();
-    std::vector<int64_t> Lmul(d,1), Amul(d,0), Bmul(d,0);
-    for (int i=d-2;i>=0;--i) Lmul[i]=Lmul[i+1]*L[i+1];
+    std::vector<int64_t> Lmul(d, 1), Amul(d, 0), Bmul(d, 0);
+    for (int i = d - 2; i >= 0; --i) Lmul[i] = Lmul[i + 1] * L[i + 1];
 
-    // For your current row-major contiguous case: if a dim equals 1, that tensor “broadcasts” ⇒ offset multiplier 0.
-    // Otherwise, step size is the product of the sizes of the trailing dims (here we reuse s_batch per matrix).
     {
-        int64_t a_step = Ar.s_batch; // elements to jump one A matrix
-        int64_t b_step = Br.s_batch;
-        for (int i=d-1, ia=(int)Alead.size()-1; i>=0; --i, --ia) {
-            int asz = (ia>=0)? Alead[ia] : 1;
-            Amul[i] = (asz==1)? 0 : a_step;
-            if (asz!=1) a_step *= asz; // for completeness; with contiguous it equals product of higher dims
+        int64_t a_step = Ar.s_batch;  // size in elements to jump one A matrix
+        int64_t b_step = Br.s_batch;  // size in elements to jump one B matrix
+        for (int i = d - 1, ia = (int)Alead.size() - 1; i >= 0; --i, --ia) {
+            int asz = (ia >= 0) ? Alead[ia] : 1;
+            Amul[i] = (asz == 1) ? 0 : a_step;
+            if (asz != 1) a_step *= asz;
         }
-        for (int i=d-1, ib=(int)Blead.size()-1; i>=0; --i, --ib) {
-            int bsz = (ib>=0)? Blead[ib] : 1;
-            Bmul[i] = (bsz==1)? 0 : b_step;
-            if (bsz!=1) b_step *= bsz;
+        for (int i = d - 1, ib = (int)Blead.size() - 1; i >= 0; --i, --ib) {
+            int bsz = (ib >= 0) ? Blead[ib] : 1;
+            Bmul[i] = (bsz == 1) ? 0 : b_step;
+            if (bsz != 1) b_step *= bsz;
         }
     }
 
     const float* Abase = Ar.base;
     const float* Bbase = Br.base;
-    float*       Cbase = C.data_ptr();
+
+    // >>> ensure we get a writable pointer to C's storage
+    float* Cbase = C.data().data();
     const int64_t Cstride = (int64_t)M * N;
 
     for (int64_t b = 0; b < BATCH; ++b) {
-        // decode batch b into per-tensor element offsets
         int64_t aoff = Ar.offset, boff = Br.offset;
         int64_t t = b;
-        for (int i=0;i<d;++i) {
-            const int idx = (d==0)? 0 : (int)(t / Lmul[i]) % L[i];
-            t = (d==0)? 0 : (t % Lmul[i]);
+        for (int i = 0; i < d; ++i) {
+            const int idx = (d == 0) ? 0 : (int)(t / Lmul[i]) % L[i];
+            t = (d == 0) ? 0 : (t % Lmul[i]);
             aoff += idx * Amul[i];
             boff += idx * Bmul[i];
         }
@@ -566,19 +569,99 @@ void matmul_strided_batched_kernel(const Tensor& A, const Tensor& B, Tensor& C,
         const float* B0 = Bbase + boff;
         float*       C0 = Cbase + b * Cstride;
 
-        // Plain 3-loop GEMM using strides (no materialization)
-        for (int i=0;i<M;++i) {
+        for (int i = 0; i < M; ++i) {
             float* Crow = C0 + (int64_t)i * N;
             const float* Ai0 = A0 + (int64_t)i * Ar.s_row;
-            for (int j=0;j<N;++j) {
+            for (int j = 0; j < N; ++j) {
                 const float* Bj0 = B0 + (int64_t)j * Br.s_col;
                 float acc = 0.0f;
                 const float* Ai = Ai0;
                 const float* Bj = Bj0;
-                for (int k=0;k<K;++k) {
+                for (int k = 0; k < K; ++k) {
                     acc += *Ai * *Bj;
-                    Ai += Ar.s_col; // advance along K in A
-                    Bj += Br.s_row; // advance along K in B
+                    Ai += Ar.s_col;  // advance along A's columns
+                    Bj += Br.s_row;  // advance along B's rows
+                }
+                Crow[j] = acc;
+            }
+        }
+    }
+}
+
+
+void mm_strided_batched_kernel(const Tensor& A, const Tensor& B, Tensor& C) {
+    const auto& Ash = A.shape();
+    const auto& Bsh = B.shape();
+    if (Ash.size() < 2 || Bsh.size() < 2)
+        throw std::runtime_error("matmul: rank>=2");
+
+    // Interpret last 2 dims as matrix dimensions
+    MatRef Ar = as_matrix_ref(A);  // Assumes input is pre-transposed
+    MatRef Br = as_matrix_ref(B);
+
+    const int M = Ar.M;
+    const int N = Br.N;
+    const int K_left = Ar.N;
+    const int K_right = Br.M;
+    if (K_left != K_right)
+        throw std::runtime_error("matmul: inner dim mismatch");
+    const int K = K_left;
+
+    std::vector<int> Alead(Ash.begin(), Ash.end() - 2);
+    std::vector<int> Blead(Bsh.begin(), Bsh.end() - 2);
+    std::vector<int> L = broadcast_leading(Alead, Blead);
+    const int64_t BATCH = L.empty() ? 1 : prod(L);
+
+    const int d = (int)L.size();
+    std::vector<int64_t> Lmul(d, 1), Amul(d, 0), Bmul(d, 0);
+    for (int i = d - 2; i >= 0; --i)
+        Lmul[i] = Lmul[i + 1] * L[i + 1];
+
+    {
+        int64_t a_step = Ar.s_batch;
+        int64_t b_step = Br.s_batch;
+        for (int i = d - 1, ia = (int)Alead.size() - 1; i >= 0; --i, --ia) {
+            int asz = (ia >= 0) ? Alead[ia] : 1;
+            Amul[i] = (asz == 1) ? 0 : a_step;
+            if (asz != 1) a_step *= asz;
+        }
+        for (int i = d - 1, ib = (int)Blead.size() - 1; i >= 0; --i, --ib) {
+            int bsz = (ib >= 0) ? Blead[ib] : 1;
+            Bmul[i] = (bsz == 1) ? 0 : b_step;
+            if (bsz != 1) b_step *= bsz;
+        }
+    }
+
+    const float* Abase = Ar.base;
+    const float* Bbase = Br.base;
+    float* Cbase = C.data().data();
+    const int64_t Cstride = (int64_t)M * N;
+
+    for (int64_t b = 0; b < BATCH; ++b) {
+        int64_t aoff = Ar.offset, boff = Br.offset;
+        int64_t t = b;
+        for (int i = 0; i < d; ++i) {
+            const int idx = (int)(t / Lmul[i]) % L[i];
+            t = t % Lmul[i];
+            aoff += idx * Amul[i];
+            boff += idx * Bmul[i];
+        }
+        const float* A0 = Abase + aoff;
+        const float* B0 = Bbase + boff;
+        float*       C0 = Cbase + b * Cstride;
+
+        for (int i = 0; i < M; ++i) {
+            float* Crow = C0 + (int64_t)i * N;
+            const float* Ai0 = A0 + (int64_t)i * Ar.s_row;
+            for (int j = 0; j < N; ++j) {
+                const float* Bj0 = B0 + (int64_t)j * Br.s_col;
+                float acc = 0.0f;
+                const float* Ai = Ai0;
+                const float* Bj = Bj0;
+                for (int k = 0; k < K; ++k) {
+                    acc += *Ai * *Bj;
+                    Ai += Ar.s_col;
+                    Bj += Br.s_row;
                 }
                 Crow[j] = acc;
             }
